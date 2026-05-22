@@ -84,10 +84,10 @@ export default function AIChat() {
       if (!res.ok) {
         let detail = '';
         try { const j = await res.json(); detail = j?.error || j?.message || ''; } catch {}
-        if (res.status === 401) throw new Error('Server key is invalid. Owner: check GROQ_API_KEY in Cloudflare/.env.');
+        if (res.status === 401 || res.status === 403) throw new Error('AI key invalid or revoked. The site owner needs to rotate GROQ_API_KEY in Cloudflare → Settings → Variables, then redeploy.');
         if (res.status === 429) throw new Error('Many questions right now — please try again in a moment.');
         if (res.status === 500 && detail) throw new Error(detail);
-        throw new Error(`Request failed (${res.status})`);
+        throw new Error(`Request failed (${res.status})${detail ? `: ${detail}` : ''}`);
       }
 
       const data = await res.json();
