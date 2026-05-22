@@ -66,11 +66,39 @@ export async function onRequestPost({ request, env }) {
   });
 }
 
-// Diagnostic: GET /api/chat shows whether the key is reaching the function.
-// Never returns the key itself — just length + first/last 4 chars so we can
-// detect typos, leading/trailing whitespace, or accidental prefixes.
-export async function onRequestGet({ env }) {
+// Diagnostic: GET /api/chat → env var check.
+// GET /api/chat?test=1 → live Groq round-trip with the configured key.
+export async function onRequestGet({ request, env }) {
   const k = env.GROQ_API_KEY || '';
+  const url = new URL(request.url);
+
+  if (url.searchParams.get('test') === '1') {
+    if (!k) return json({ error: 'No key configured' }, 500);
+    try {
+      const testRes = await fetch(GROQ_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${k}`
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          messages: [{ role: 'user', content: 'hi' }],
+          max_tokens: 5
+        })
+      });
+      const body = await testRes.text();
+      return json({
+        status: testRes.status,
+        ok: testRes.ok,
+        model: MODEL,
+        groqResponse: body.slice(0, 1500)
+      });
+    } catch (err) {
+      return json({ error: 'fetch threw', detail: String(err) }, 500);
+    }
+  }
+
   return json({
     keyConfigured: !!k,
     keyLength: k.length,
@@ -79,7 +107,8 @@ export async function onRequestGet({ env }) {
     hasLeadingWhitespace: k !== k.trimStart(),
     hasTrailingWhitespace: k !== k.trimEnd(),
     startsWithBearer: k.toLowerCase().startsWith('bearer '),
-    looksLikeGroqKey: k.startsWith('gsk_')
+    looksLikeGroqKey: k.startsWith('gsk_'),
+    model: MODEL
   });
 }
 
