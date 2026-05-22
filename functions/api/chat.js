@@ -66,6 +66,23 @@ export async function onRequestPost({ request, env }) {
   });
 }
 
+// Diagnostic: GET /api/chat shows whether the key is reaching the function.
+// Never returns the key itself — just length + first/last 4 chars so we can
+// detect typos, leading/trailing whitespace, or accidental prefixes.
+export async function onRequestGet({ env }) {
+  const k = env.GROQ_API_KEY || '';
+  return json({
+    keyConfigured: !!k,
+    keyLength: k.length,
+    keyPrefix: k.slice(0, 4) || null,
+    keySuffix: k.slice(-4) || null,
+    hasLeadingWhitespace: k !== k.trimStart(),
+    hasTrailingWhitespace: k !== k.trimEnd(),
+    startsWithBearer: k.toLowerCase().startsWith('bearer '),
+    looksLikeGroqKey: k.startsWith('gsk_')
+  });
+}
+
 function num(v, dflt) { const n = Number(v); return Number.isFinite(n) ? n : dflt; }
 function int(v, dflt) { const n = parseInt(v, 10); return Number.isFinite(n) ? n : dflt; }
 function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
