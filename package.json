@@ -1,0 +1,21 @@
+{
+  "name": "tahanan-tutorial-center",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Tahanan Tutorial Center — Math & English tutorials for ages 3-6 in San Pedro, Laguna",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173",
+    "deploy": "vite build && npx wrangler@latest pages deploy dist --project-name=tahanan-tutorial"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.10"
+  }
+}
