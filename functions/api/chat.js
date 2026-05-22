@@ -1,22 +1,12 @@
-// Cloudflare Pages Function — server-side proxy for Groq API.
+// Cloudflare Pages Function — uses Workers AI (native, no external API).
 // Path: POST /api/chat
 //
-// Why this exists: the Groq API key MUST stay server-side. If we put it in
-// VITE_* env, Vite bakes it into the public JS bundle — anyone can extract it.
-// This function reads GROQ_API_KEY from Cloudflare's server-side environment
-// (Pages → Settings → Environment variables) and forwards the chat request.
+// Why Workers AI: we pivoted away from Groq because Groq blocks our specific
+// Cloudflare egress IPs for this account. Workers AI runs Llama natively inside
+// Cloudflare's network — no external HTTP call, no API key, no routing issues.
+// Free tier: 10,000 Neurons/day, plenty for a small tutorial center.
 
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const MODEL    = 'llama-3.3-70b-versatile';
-
-function buildHeaders(key) {
-  return {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-    'User-Agent': 'Tahanan-Tutorial/1.0 (+https://tahanan-tutorial.pages.dev)',
-    'Authorization': `Bearer ${key}`
-  };
-}
+const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
 function json(body, status = 200, extra = {}) {
   return new Response(JSON.stringify(body), {
@@ -26,9 +16,9 @@ function json(body, status = 200, extra = {}) {
 }
 
 export async function onRequestPost({ request, env }) {
-  if (!env.GROQ_API_KEY) {
+  if (!env.AI) {
     return json(
-      { error: 'Server is missing the GROQ_API_KEY environment variable. Configure it in the Cloudflare Pages dashboard under Settings → Environment variables.' },
+      { error: 'AI binding not configured. Owner: in Cloudflare → Pages project → Settings → Bindings, add a Workers AI binding named "AI".' },
       500
     );
   }
@@ -45,74 +35,52 @@ export async function onRequestPost({ request, env }) {
   }
 
   const safePayload = {
-    model: MODEL,
     messages: body.messages,
     temperature: clamp(num(body.temperature, 0.4), 0, 1),
     max_tokens: clamp(int(body.max_tokens, 800), 16, 1024)
   };
 
-  let groqRes;
+  let result;
   try {
-    groqRes = await fetch(GROQ_URL, {
-      method: 'POST',
-      headers: buildHeaders(env.GROQ_API_KEY),
-      body: JSON.stringify(safePayload)
-    });
+    result = await env.AI.run(MODEL, safePayload);
   } catch (err) {
-    return json({ error: 'Network error reaching Groq', detail: String(err) }, 502);
+    return json({ error: 'Workers AI call failed', detail: String(err) }, 502);
   }
 
-  const text = await groqRes.text();
-  return new Response(text, {
-    status: groqRes.status,
-    headers: { 'Content-Type': groqRes.headers.get('Content-Type') || 'application/json' }
+  const text = result?.response ?? '';
+  if (!text) {
+    return json({ error: 'Empty response from Workers AI', raw: result }, 502);
+  }
+
+  // Return OpenAI-compatible shape so the existing frontend (data.choices[0].message.content) keeps working.
+  return json({
+    id: `chatcmpl-cf-${Date.now()}`,
+    object: 'chat.completion',
+    model: MODEL,
+    choices: [{
+      index: 0,
+      message: { role: 'assistant', content: text },
+      finish_reason: 'stop'
+    }]
   });
 }
 
-// Diagnostic endpoints:
-//   GET /api/chat            → env var inspection (no Groq call)
-//   GET /api/chat?test=1     → live Groq round-trip with current key
-//   GET /api/chat?test=1&model=openai/gpt-oss-20b → try a different model
-export async function onRequestGet({ request, env }) {
-  const k = env.GROQ_API_KEY || '';
-  const url = new URL(request.url);
-
-  if (url.searchParams.get('test') === '1') {
-    if (!k) return json({ error: 'No key configured' }, 500);
-    const testModel = url.searchParams.get('model') || MODEL;
-    try {
-      const testRes = await fetch(GROQ_URL, {
-        method: 'POST',
-        headers: buildHeaders(k),
-        body: JSON.stringify({
-          model: testModel,
-          messages: [{ role: 'user', content: 'hi' }],
-          max_tokens: 5
-        })
-      });
-      const body = await testRes.text();
-      return json({
-        status: testRes.status,
-        ok: testRes.ok,
-        modelTried: testModel,
-        groqResponse: body.slice(0, 1500)
-      });
-    } catch (err) {
-      return json({ error: 'fetch threw', detail: String(err) }, 500);
-    }
+// Diagnostic: GET /api/chat → check AI binding + run a tiny test inference.
+export async function onRequestGet({ env }) {
+  const hasBinding = !!env.AI;
+  if (!hasBinding) {
+    return json({ aiBinding: false, hint: 'Add a Workers AI binding named "AI" in Pages → Settings → Bindings.' });
   }
 
-  return json({
-    keyConfigured: !!k,
-    keyLength: k.length,
-    keyPrefix: k.slice(0, 4) || null,
-    keySuffix: k.slice(-4) || null,
-    hasLeadingWhitespace: k !== k.trimStart(),
-    hasTrailingWhitespace: k !== k.trimEnd(),
-    startsWithBearer: k.toLowerCase().startsWith('bearer '),
-    looksLikeGroqKey: k.startsWith('gsk_'),
-    defaultModel: MODEL
-  });
+  try {
+    const ping = await env.AI.run(MODEL, {
+      messages: [{ role: 'user', content: 'Say hi in one word.' }],
+      max_tokens: 5
+    });
+    return json({ aiBinding: true, model: MODEL, ok: true, sample: ping });
+  } catch (err) {
+    return json({ aiBinding: true, model: MODEL, ok: false, error: String(err) }, 500);
+  }
 }
 
 function num(v, dflt) { const n = Number(v); return Number.isFinite(n) ? n : dflt; }
