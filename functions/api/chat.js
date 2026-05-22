@@ -9,6 +9,15 @@
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const MODEL    = 'llama-3.3-70b-versatile';
 
+function buildHeaders(key) {
+  return {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'User-Agent': 'Tahanan-Tutorial/1.0 (+https://tahanan-tutorial.pages.dev)',
+    'Authorization': `Bearer ${key}`
+  };
+}
+
 function json(body, status = 200, extra = {}) {
   return new Response(JSON.stringify(body), {
     status,
@@ -35,8 +44,6 @@ export async function onRequestPost({ request, env }) {
     return json({ error: 'messages[] is required' }, 400);
   }
 
-  // Whitelist + clamp inputs so clients can't abuse the key (e.g. swap to a
-  // bigger model, request huge token counts, change provider params arbitrarily).
   const safePayload = {
     model: MODEL,
     messages: body.messages,
@@ -48,17 +55,13 @@ export async function onRequestPost({ request, env }) {
   try {
     groqRes = await fetch(GROQ_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${env.GROQ_API_KEY}`
-      },
+      headers: buildHeaders(env.GROQ_API_KEY),
       body: JSON.stringify(safePayload)
     });
   } catch (err) {
     return json({ error: 'Network error reaching Groq', detail: String(err) }, 502);
   }
 
-  // Pass through Groq's response (status + body), but never leak the auth header.
   const text = await groqRes.text();
   return new Response(text, {
     status: groqRes.status,
@@ -66,23 +69,23 @@ export async function onRequestPost({ request, env }) {
   });
 }
 
-// Diagnostic: GET /api/chat → env var check.
-// GET /api/chat?test=1 → live Groq round-trip with the configured key.
+// Diagnostic endpoints:
+//   GET /api/chat            → env var inspection (no Groq call)
+//   GET /api/chat?test=1     → live Groq round-trip with current key
+//   GET /api/chat?test=1&model=openai/gpt-oss-20b → try a different model
 export async function onRequestGet({ request, env }) {
   const k = env.GROQ_API_KEY || '';
   const url = new URL(request.url);
 
   if (url.searchParams.get('test') === '1') {
     if (!k) return json({ error: 'No key configured' }, 500);
+    const testModel = url.searchParams.get('model') || MODEL;
     try {
       const testRes = await fetch(GROQ_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${k}`
-        },
+        headers: buildHeaders(k),
         body: JSON.stringify({
-          model: MODEL,
+          model: testModel,
           messages: [{ role: 'user', content: 'hi' }],
           max_tokens: 5
         })
@@ -91,7 +94,7 @@ export async function onRequestGet({ request, env }) {
       return json({
         status: testRes.status,
         ok: testRes.ok,
-        model: MODEL,
+        modelTried: testModel,
         groqResponse: body.slice(0, 1500)
       });
     } catch (err) {
@@ -108,7 +111,7 @@ export async function onRequestGet({ request, env }) {
     hasTrailingWhitespace: k !== k.trimEnd(),
     startsWithBearer: k.toLowerCase().startsWith('bearer '),
     looksLikeGroqKey: k.startsWith('gsk_'),
-    model: MODEL
+    defaultModel: MODEL
   });
 }
 
